@@ -620,19 +620,44 @@ function ActivityHeatmap({ daily }: { daily: Record<string, number> }) {
   );
 }
 
+// Approximate API pricing per 1M tokens (for cost estimation)
+const MODEL_PRICING: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+  "opus": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  "sonnet": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "haiku": { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 },
+};
+
+function estimateCost(statsData: any): number {
+  if (!statsData?.modelUsage) return 0;
+  let total = 0;
+  for (const [model, usage] of Object.entries(statsData.modelUsage) as any[]) {
+    const tier = model.includes("opus") ? "opus" : model.includes("haiku") ? "haiku" : "sonnet";
+    const p = MODEL_PRICING[tier];
+    const inp = (usage.inputTokens || 0) / 1_000_000 * p.input;
+    const out = (usage.outputTokens || 0) / 1_000_000 * p.output;
+    const cacheR = (usage.cacheReadInputTokens || 0) / 1_000_000 * p.cacheRead;
+    const cacheW = (usage.cacheCreationInputTokens || 0) / 1_000_000 * p.cacheWrite;
+    total += inp + out + cacheR + cacheW;
+  }
+  return total;
+}
+
 function StatsView({ sessions }: { sessions: SessionMetadata[] }) {
   const [activityData, setActivityData] = useState<{ daily: Record<string, number>; hourly: Record<string, number> } | null>(null);
+  const [statsData, setStatsData] = useState<any>(null);
 
   useEffect(() => {
     invoke<{ daily: Record<string, number>; hourly: Record<string, number> }>("get_activity_data")
       .then(setActivityData)
       .catch(console.error);
+    invoke("get_stats").then(setStatsData).catch(console.error);
   }, []);
 
   const totalMessages = sessions.reduce((s, x) => s + x.messageCount, 0);
   const totalToolCalls = sessions.reduce((s, x) => s + x.toolCallCount, 0);
   const totalOutput = sessions.reduce((s, x) => s + x.totalOutputTokens, 0);
   const totalInput = sessions.reduce((s, x) => s + x.totalInputTokens, 0);
+  const estimatedCost = estimateCost(statsData);
 
   // Tool breakdown
   const toolTotals: Record<string, number> = {};
@@ -663,7 +688,7 @@ function StatsView({ sessions }: { sessions: SessionMetadata[] }) {
           { label: "Sessions", value: fmtNum(sessions.length), sub: `${fmtNum(sessions.filter((s) => s.subagentCount > 0).length)} with agents` },
           { label: "Messages", value: fmtNum(totalMessages), sub: `${fmtNum(sessions.reduce((s, x) => s + x.userMessageCount, 0))} from you` },
           { label: "Tokens", value: fmtTokens(totalOutput + totalInput), sub: `${fmtTokens(totalOutput)} out · ${fmtTokens(totalInput)} in` },
-          { label: "Tool Calls", value: fmtNum(totalToolCalls), sub: `${fmtNum(Object.keys(toolTotals).length)} tools` },
+          { label: "Est. Cost", value: estimatedCost > 0 ? `$${estimatedCost.toFixed(0)}` : "$0", sub: estimatedCost > 0 ? "at API rates" : "subscription" },
           { label: "Active Days", value: fmtNum(activeDays), sub: busiestDay[0] ? `peak: ${busiestDay[0].substring(5)}` : "" },
         ].map(({ label, value, sub }) => (
           <div key={label} className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
@@ -731,9 +756,29 @@ function StatsView({ sessions }: { sessions: SessionMetadata[] }) {
 
       {/* Models */}
       <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
-        <h3 className="text-sm font-semibold text-white mb-3">Models</h3>
-        <div className="flex flex-wrap gap-2">
-          {Object.entries(modelCounts).sort(([, a], [, b]) => b - a).map(([model, count]) => (
+        <h3 className="text-sm font-semibold text-white mb-3">Models & Token Usage</h3>
+        <div className="space-y-3">
+          {statsData?.modelUsage && Object.entries(statsData.modelUsage as Record<string, any>)
+            .sort(([, a]: any, [, b]: any) => (b.outputTokens || 0) - (a.outputTokens || 0))
+            .map(([model, usage]: [string, any]) => {
+              const tier = model.includes("opus") ? "opus" : model.includes("haiku") ? "haiku" : "sonnet";
+              const p = MODEL_PRICING[tier];
+              const cost = (usage.inputTokens || 0) / 1e6 * p.input
+                + (usage.outputTokens || 0) / 1e6 * p.output
+                + (usage.cacheReadInputTokens || 0) / 1e6 * p.cacheRead
+                + (usage.cacheCreationInputTokens || 0) / 1e6 * p.cacheWrite;
+              return (
+                <div key={model} className="flex items-center gap-3 bg-neutral-800/50 rounded-lg px-3 py-2">
+                  <span className="text-xs font-mono text-neutral-300 w-40 truncate">{model.replace("claude-", "")}</span>
+                  <span className="text-[10px] text-neutral-500">{fmtTokens(usage.outputTokens || 0)} out</span>
+                  <span className="text-[10px] text-neutral-500">{fmtTokens(usage.cacheReadInputTokens || 0)} cached</span>
+                  <span className="text-[10px] text-neutral-500">{modelCounts[model] || 0} sessions</span>
+                  <div className="flex-1" />
+                  <span className="text-xs text-green-400 font-medium">${cost.toFixed(2)}</span>
+                </div>
+              );
+            })}
+          {!statsData?.modelUsage && Object.entries(modelCounts).sort(([, a], [, b]) => b - a).map(([model, count]) => (
             <div key={model} className="flex items-center gap-2 bg-neutral-800 rounded-lg px-3 py-1.5">
               <span className="text-xs font-mono text-neutral-300">{model.replace("claude-", "")}</span>
               <span className="text-xs text-neutral-500">{count} sessions</span>
