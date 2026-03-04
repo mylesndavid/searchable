@@ -1,6 +1,7 @@
 mod scanner;
 
 use scanner::SessionMetadata;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, State};
@@ -152,6 +153,45 @@ fn send_claude_message(
 }
 
 #[tauri::command]
+fn get_session_names() -> Result<HashMap<String, String>, String> {
+    let path = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".claude-code-explorer")
+        .join("session-names.json");
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn rename_session(session_id: String, name: String) -> Result<String, String> {
+    let dir = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".claude-code-explorer");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("session-names.json");
+
+    let mut names: HashMap<String, String> = if path.exists() {
+        let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+
+    if name.trim().is_empty() {
+        names.remove(&session_id);
+    } else {
+        names.insert(session_id, name.trim().to_string());
+    }
+
+    let json = serde_json::to_string_pretty(&names).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok("saved".to_string())
+}
+
+#[tauri::command]
 fn get_stats(state: State<AppState>) -> Result<serde_json::Value, String> {
     let stats_path = state.claude_dir.join("stats-cache.json");
     if !stats_path.exists() {
@@ -233,6 +273,8 @@ pub fn run() {
             send_claude_message,
             get_stats,
             get_activity_data,
+            get_session_names,
+            rename_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -158,11 +158,12 @@ function Md({ children }: { children: string }) {
 // ── Session Card ─────────────────────────────────────────────────────────────
 
 function SessionCard({
-  session, onClick, onResume,
+  session, onClick, onResume, customName,
 }: {
   session: SessionMetadata;
   onClick: () => void;
   onResume: () => void;
+  customName?: string | null;
 }) {
   const topTools = Object.entries(session.toolsUsed).sort(([, a], [, b]) => b - a).slice(0, 4);
   return (
@@ -171,8 +172,11 @@ function SessionCard({
         <button onClick={onClick} className="min-w-0 flex-1 text-left">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-sm font-medium text-white truncate">
-              {session.slug || session.sessionId.substring(0, 12)}
+              {customName || session.slug || session.sessionId.substring(0, 12)}
             </span>
+            {customName && session.slug && (
+              <span className="text-[10px] text-neutral-600 truncate">{session.slug}</span>
+            )}
             {session.gitBranch && session.gitBranch !== "HEAD" && (
               <span className="flex items-center gap-1 text-xs text-purple-400 shrink-0">
                 <GitBranch className="w-3 h-3" />
@@ -280,7 +284,9 @@ interface ConvPage {
   offset: number;
 }
 
-function ConversationView({ session, onBack }: { session: SessionMetadata; onBack: () => void }) {
+function ConversationView({ session, onBack, customName, onRename }: { session: SessionMetadata; onBack: () => void; customName?: string | null; onRename?: (name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(customName || "");
   const [messages, setMessages] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -353,7 +359,27 @@ function ConversationView({ session, onBack }: { session: SessionMetadata; onBac
         </button>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-white text-sm">{session.slug || session.sessionId.substring(0, 12)}</span>
+            {editing ? (
+              <input
+                autoFocus
+                className="font-semibold text-white text-sm bg-neutral-800 border border-neutral-600 rounded px-1 py-0.5 focus:outline-none focus:border-blue-500 w-48"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                onBlur={() => { setEditing(false); onRename?.(editName); }}
+                onKeyDown={(e) => { if (e.key === "Enter") { setEditing(false); onRename?.(editName); } if (e.key === "Escape") setEditing(false); }}
+              />
+            ) : (
+              <span
+                className="font-semibold text-white text-sm cursor-pointer hover:text-blue-400 transition-colors"
+                onDoubleClick={() => { setEditing(true); setEditName(customName || session.slug || ""); }}
+                title="Double-click to rename"
+              >
+                {customName || session.slug || session.sessionId.substring(0, 12)}
+              </span>
+            )}
+            {customName && session.slug && !editing && (
+              <span className="text-[10px] text-neutral-600">{session.slug}</span>
+            )}
             {session.gitBranch && session.gitBranch !== "HEAD" && (
               <span className="flex items-center gap-1 text-xs text-purple-400"><GitBranch className="w-3 h-3" /> {session.gitBranch}</span>
             )}
@@ -806,6 +832,7 @@ function App() {
   const [view, setView] = useState<View>({ type: "home" });
   const filter: string = "";
   const [showAllWorkspaces, setShowAllWorkspaces] = useState(false);
+  const [sessionNames, setSessionNames] = useState<Record<string, string>>({});
 
   useEffect(() => {
     setLoading(true);
@@ -813,7 +840,15 @@ function App() {
       .then(setSessions)
       .catch((e) => console.error(e))
       .finally(() => setLoading(false));
+    invoke<Record<string, string>>("get_session_names").then(setSessionNames).catch(() => {});
   }, []);
+
+  const getDisplayName = (s: SessionMetadata) => sessionNames[s.sessionId] || null;
+  const doRename = async (sessionId: string, name: string) => {
+    await invoke("rename_session", { sessionId, name });
+    const updated = await invoke<Record<string, string>>("get_session_names");
+    setSessionNames(updated);
+  };
 
   const refresh = () => {
     setLoading(true);
@@ -850,7 +885,7 @@ function App() {
 
   // ── Conversation View ──
   if (view.type === "conversation") {
-    return <div className="h-screen flex flex-col bg-[#0a0a0a]"><ConversationView session={view.session} onBack={() => setView({ type: "home" })} /></div>;
+    return <div className="h-screen flex flex-col bg-[#0a0a0a]"><ConversationView session={view.session} onBack={() => setView({ type: "home" })} customName={getDisplayName(view.session)} onRename={(name) => doRename(view.session.sessionId, name)} /></div>;
   }
 
   // ── Search View ──
@@ -916,6 +951,7 @@ function App() {
           {projectSessions.map((s) => (
             <SessionCard
               key={s.sessionId} session={s}
+              customName={getDisplayName(s)}
               onClick={() => setView({ type: "conversation", session: s })}
               onResume={() => resumeSession(s)}
             />
