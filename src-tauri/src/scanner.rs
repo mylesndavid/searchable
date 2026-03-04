@@ -595,7 +595,10 @@ pub fn search_all(
             continue;
         }
 
-        let file = File::open(&jsonl_path)?;
+        let file = match File::open(&jsonl_path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
         let reader = BufReader::with_capacity(64 * 1024, file);
 
         for line in reader.lines() {
@@ -685,8 +688,15 @@ pub fn search_all(
 fn build_snippet(text: &str, query_lower: &str, context_chars: usize) -> String {
     let text_lower = text.to_lowercase();
     if let Some(pos) = text_lower.find(query_lower) {
-        let start = pos.saturating_sub(context_chars);
-        let end = (pos + query_lower.len() + context_chars).min(text.len());
+        // Find char-safe boundaries by snapping to char boundaries
+        let mut start = pos.saturating_sub(context_chars);
+        while start > 0 && !text.is_char_boundary(start) {
+            start -= 1;
+        }
+        let mut end = (pos + query_lower.len() + context_chars).min(text.len());
+        while end < text.len() && !text.is_char_boundary(end) {
+            end += 1;
+        }
         let mut snippet = String::new();
         if start > 0 {
             snippet.push_str("...");
