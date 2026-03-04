@@ -104,6 +104,18 @@ struct RawEntry {
     tool_use_result: Option<serde_json::Value>,
 }
 
+/// Safely truncate a string at a char boundary
+fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Strip ANSI escape codes from a string
 fn strip_ansi(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
@@ -334,7 +346,9 @@ fn scan_session_file(
 
     // Truncate first message preview
     if last_user_text.len() > 200 {
-        last_user_text.truncate(200);
+        let mut end = 200;
+        while end > 0 && !last_user_text.is_char_boundary(end) { end -= 1; }
+        last_user_text.truncate(end);
         last_user_text.push_str("...");
     }
 
@@ -448,7 +462,7 @@ pub fn parse_conversation(path: &Path) -> Result<Vec<ConversationMessage>, Box<d
                                             .unwrap_or_default();
                                         // Truncate very long results for the frontend
                                         let truncated = if result_text.len() > 10000 {
-                                            format!("{}...\n[truncated, {} total bytes]", &result_text[..10000], result_text.len())
+                                            format!("{}...\n[truncated, {} total bytes]", safe_truncate(&result_text, 10000), result_text.len())
                                         } else {
                                             result_text
                                         };
@@ -526,7 +540,7 @@ pub fn parse_conversation(path: &Path) -> Result<Vec<ConversationMessage>, Box<d
                                         if let Some(thinking) = block.get("thinking").and_then(|t| t.as_str()) {
                                             // Just take first 200 chars as summary
                                             let summary = if thinking.len() > 200 {
-                                                format!("{}...", &thinking[..200])
+                                                format!("{}...", safe_truncate(thinking, 200))
                                             } else {
                                                 thinking.to_string()
                                             };
